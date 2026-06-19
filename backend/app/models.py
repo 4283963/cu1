@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from .database import Base
@@ -52,3 +52,19 @@ class FanControlLog(Base):
     reason = Column(String, default="manual")
 
     fan = relationship("Fan", back_populates="control_logs")
+
+
+class FanSchedule(Base):
+    __tablename__ = "fan_schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    fan_ids = Column(String, nullable=False, default="[]")
+    weekdays = Column(String, nullable=False, default="[]")
+    start_time = Column(String, nullable=False)
+    end_time = Column(String, nullable=False)
+    target_temperature = Column(Float, nullable=False, default=26.0)
+    is_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_triggered = Column(DateTime, nullable=True)
+

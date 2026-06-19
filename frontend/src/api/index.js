@@ -137,3 +137,22 @@ export const fanApi = {
 export const healthApi = {
   check: () => request('/health', { idempotent: false })
 }
+
+export const scheduleApi = {
+  getSchedules: () => request('/schedules', { idempotent: false }),
+  getSchedule: (id) => request(`/schedules/${id}`, { idempotent: false }),
+  createSchedule: (data) => request('/schedules', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  }),
+  updateSchedule: (id, data) => request(`/schedules/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  }),
+  deleteSchedule: (id) => request(`/schedules/${id}`, {
+    method: 'DELETE'
+  }),
+  toggleSchedule: (id) => request(`/schedules/${id}/toggle`, {
+    method: 'POST'
+  })
+}

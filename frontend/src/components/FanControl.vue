@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useFanWebSocket } from '../composables/useWebSocket'
-import { fanApi } from '../api'
+import { fanApi, scheduleApi } from '../api'
 import FanCard from './FanCard.vue'
+import ScheduleModal from './ScheduleModal.vue'
 
 const fans = ref([])
 const loading = ref(true)
@@ -11,6 +12,22 @@ const logs = ref([])
 const logsLoading = ref(false)
 const globalError = ref(null)
 const refreshTimer = ref(null)
+
+const schedules = ref([])
+const schedulesLoading = ref(false)
+const scheduleModalVisible = ref(false)
+const scheduleModalRef = ref(null)
+const scheduleError = ref(null)
+
+const WEEKDAYS = [
+  { value: 0, label: '一', short: '一' },
+  { value: 1, label: '二', short: '二' },
+  { value: 2, label: '三', short: '三' },
+  { value: 3, label: '四', short: '四' },
+  { value: 4, label: '五', short: '五' },
+  { value: 5, label: '六', short: '六' },
+  { value: 6, label: '日', short: '日' }
+]
 
 const fanLocalState = new Map()
 
@@ -53,6 +70,28 @@ async function loadFans(silent = false) {
   } finally {
     if (!silent) {
       loading.value = false
+    }
+  }
+}
+
+async function loadSchedules(silent = false) {
+  try {
+    if (!silent) {
+      schedulesLoading.value = true
+    }
+    scheduleError.value = null
+    const data = await scheduleApi.getSchedules()
+    if (Array.isArray(data)) {
+      schedules.value = data
+    }
+  } catch (e) {
+    scheduleError.value = e.message || '加载计划失败'
+    if (!silent) {
+      console.error('Failed to load schedules:', e)
+    }
+  } finally {
+    if (!silent) {
+      schedulesLoading.value = false
     }
   }
 }
@@ -147,6 +186,68 @@ async function _loadLogs(fanId) {
   }
 }
 
+function openCreateSchedule() {
+  if (scheduleModalRef.value) {
+    scheduleModalRef.value.openForCreate()
+  }
+  scheduleModalVisible.value = true
+}
+
+function openEditSchedule(schedule) {
+  if (scheduleModalRef.value) {
+    scheduleModalRef.value.openForEdit(schedule)
+  }
+  scheduleModalVisible.value = true
+}
+
+function closeScheduleModal() {
+  scheduleModalVisible.value = false
+}
+
+async function onScheduleSaved() {
+  await loadSchedules(true)
+}
+
+async function toggleScheduleEnabled(schedule) {
+  try {
+    await scheduleApi.toggleSchedule(schedule.id)
+    schedule.is_enabled = !schedule.is_enabled
+  } catch (e) {
+    console.error('Failed to toggle schedule:', e)
+    scheduleError.value = e.message || '切换失败'
+  }
+}
+
+async function deleteSchedule(schedule) {
+  if (!confirm(`确定要删除计划「${schedule.name}」吗？`)) {
+    return
+  }
+  try {
+    await scheduleApi.deleteSchedule(schedule.id)
+    schedules.value = schedules.value.filter(s => s.id !== schedule.id)
+  } catch (e) {
+    console.error('Failed to delete schedule:', e)
+    scheduleError.value = e.message || '删除失败'
+  }
+}
+
+function formatWeekdays(weekdays) {
+  if (!weekdays || weekdays.length === 0) return '未设置'
+  if (weekdays.length === 7) return '每天'
+  const sorted = [...weekdays].sort((a, b) => a - b)
+  return sorted.map(d => WEEKDAYS.find(w => w.value === d)?.short || '').join('、')
+}
+
+function formatFanNames(fanIds) {
+  if (!fanIds || fanIds.length === 0) return '未选择排风扇'
+  const names = fanIds.map(id => {
+    const fan = fans.value.find(f => f.id === id)
+    return fan ? fan.name : `#${id}`
+  })
+  if (names.length <= 3) return names.join('、')
+  return names.slice(0, 3).join('、') + ` 等${names.length}台`
+}
+
 const runningCount = () => fans.value.filter(f => f.is_running).length
 
 const formattedLogTime = (timestamp) => {
@@ -161,6 +262,11 @@ const formattedLogTime = (timestamp) => {
   })
 }
 
+const formattedScheduleTime = (schedule) => {
+  if (!schedule) return ''
+  return `${schedule.start_time} - ${schedule.end_time}`
+}
+
 watch(isConnected, (connected) => {
   if (connected) {
     loadFans(true)
@@ -169,10 +275,12 @@ watch(isConnected, (connected) => {
 
 onMounted(() => {
   loadFans()
+  loadSchedules()
   refreshTimer.value = setInterval(() => {
     if (!isConnected.value) {
       loadFans(true)
     }
+    loadSchedules(true)
   }, 10000)
 })
 
@@ -224,11 +332,11 @@ onUnmounted(() => {
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-sm text-gray-500 mb-1">已停止</p>
-            <p class="text-3xl font-bold text-gray-500">{{ fans.length - runningCount() }}</p>
+            <p class="text-sm text-gray-500 mb-1">温控计划</p>
+            <p class="text-3xl font-bold text-gray-800">{{ schedules.length }}</p>
           </div>
-          <div class="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center">
-            <span class="text-3xl">⏸️</span>
+          <div class="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center">
+            <span class="text-3xl">📅</span>
           </div>
         </div>
         <div class="mt-3 flex items-center gap-2 text-sm">
@@ -311,6 +419,114 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div class="flex items-center justify-between mt-10 mb-4">
+      <h2 class="text-lg font-semibold text-gray-800">📅 温控计划管理</h2>
+      <button
+        @click="openCreateSchedule"
+        class="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-lg hover:bg-primary-600 transition-colors shadow-md hover:shadow-lg"
+      >
+        <span class="text-lg leading-none">+</span>
+        新建温控计划
+      </button>
+    </div>
+
+    <div v-if="scheduleError" class="mb-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-700 text-sm">
+      ⚠️ {{ scheduleError }}
+    </div>
+
+    <div v-if="schedulesLoading && schedules.length === 0" class="flex justify-center py-8">
+      <div class="animate-spin rounded-full h-6 w-6 border-2 border-primary-500 border-t-transparent"></div>
+    </div>
+
+    <div v-else-if="schedules.length === 0" class="bg-white rounded-xl border border-gray-100 p-10 text-center">
+      <div class="text-5xl mb-3">📋</div>
+      <p class="text-gray-500 mb-2">暂无温控计划</p>
+      <p class="text-sm text-gray-400 mb-5">设置计划后，系统会在指定时段自动根据温度控制排风扇</p>
+      <button
+        @click="openCreateSchedule"
+        class="inline-flex items-center gap-1.5 px-4 py-2 bg-primary-500 text-white text-sm font-medium rounded-lg hover:bg-primary-600 transition-colors"
+      >
+        <span class="text-lg leading-none">+</span>
+        创建第一个计划
+      </button>
+    </div>
+
+    <div v-else class="space-y-3">
+      <div
+        v-for="schedule in schedules"
+        :key="schedule.id"
+        :class="[
+          'bg-white rounded-xl border p-4 transition-all duration-200',
+          schedule.is_enabled
+            ? 'border-gray-100 shadow-sm hover:shadow-md'
+            : 'border-gray-100 bg-gray-50 opacity-75'
+        ]"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1.5">
+              <h3 class="text-base font-semibold text-gray-800 truncate">{{ schedule.name }}</h3>
+              <span
+                v-if="schedule.is_enabled"
+                class="px-2 py-0.5 text-xs font-medium rounded-full bg-primary-100 text-primary-700"
+              >
+                已启用
+              </span>
+              <span
+                v-else
+                class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-200 text-gray-600"
+              >
+                已停用
+              </span>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1.5 text-sm text-gray-500">
+              <span class="inline-flex items-center gap-1">
+                📆 {{ formatWeekdays(schedule.weekdays) }}
+              </span>
+              <span class="inline-flex items-center gap-1">
+                ⏰ {{ formattedScheduleTime(schedule) }}
+              </span>
+              <span class="inline-flex items-center gap-1">
+                🌡️ 目标 {{ schedule.target_temperature.toFixed(1) }}°C
+              </span>
+            </div>
+            <p class="text-xs text-gray-400 mt-2 truncate">
+              控制设备：{{ formatFanNames(schedule.fan_ids) }}
+            </p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <button
+              @click="toggleScheduleEnabled(schedule)"
+              :class="[
+                'relative w-11 h-6 rounded-full transition-colors duration-200 shrink-0',
+                schedule.is_enabled ? 'bg-primary-500' : 'bg-gray-300'
+              ]"
+              :title="schedule.is_enabled ? '点击停用' : '点击启用'"
+            >
+              <span
+                class="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all duration-200"
+                :style="{ left: schedule.is_enabled ? '22px' : '2px' }"
+              ></span>
+            </button>
+            <button
+              @click="openEditSchedule(schedule)"
+              class="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+              title="编辑"
+            >
+              ✏️
+            </button>
+            <button
+              @click="deleteSchedule(schedule)"
+              class="p-2 text-gray-400 hover:text-danger-600 hover:bg-danger-50 rounded-lg transition-colors"
+              title="删除"
+            >
+              🗑️
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="mt-8 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
       <h3 class="text-sm font-medium text-gray-700 mb-3">💡 使用说明</h3>
       <ul class="text-sm text-gray-500 space-y-1">
@@ -319,7 +535,17 @@ onUnmounted(() => {
         <li>• 系统已内置防抖保护，防止高频点击造成的并发冲突</li>
         <li>• 适宜蚕宝宝生长环境：温度 22-28°C，湿度 55-80%</li>
         <li>• 当温度或湿度超出适宜范围时，请及时开启排风扇通风</li>
+        <li>• <span class="text-primary-600 font-medium">温控计划</span>：可设置每周几的指定时段内，根据目标温度自动开关排风扇</li>
+        <li>• 温度高于目标 1°C 自动开启，低于目标 0.5°C 自动关闭，避免频繁启停</li>
       </ul>
     </div>
+
+    <ScheduleModal
+      ref="scheduleModalRef"
+      :visible="scheduleModalVisible"
+      :fans="fans"
+      @close="closeScheduleModal"
+      @saved="onScheduleSaved"
+    />
   </div>
 </template>

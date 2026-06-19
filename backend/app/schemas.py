@@ -93,3 +93,36 @@ class FanControlLog(FanControlLogBase):
 class WebSocketMessage(BaseModel):
     type: str
     data: dict
+
+
+class FanScheduleBase(BaseModel):
+    name: str
+    fan_ids: list[int]
+    weekdays: list[int]
+    start_time: str
+    end_time: str
+    target_temperature: float
+    is_enabled: Optional[bool] = True
+
+
+class FanScheduleCreate(FanScheduleBase):
+    pass
+
+
+class FanScheduleUpdate(BaseModel):
+    name: Optional[str] = None
+    fan_ids: Optional[list[int]] = None
+    weekdays: Optional[list[int]] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    target_temperature: Optional[float] = None
+    is_enabled: Optional[bool] = None
+
+
+class FanSchedule(FanScheduleBase):
+    id: int
+    created_at: datetime
+    last_triggered: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

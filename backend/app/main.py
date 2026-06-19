@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from .config import settings
 from .database import engine, Base, SessionLocal
 from .models import SensorNode, Fan
-from .routers import sensors, fans
+from .routers import sensors, fans, schedules
 from .services.mock_sensor import mock_sensor_service
+from .services.schedule_service import schedule_service
 
 
 def init_db():
@@ -39,8 +40,10 @@ def init_db():
 async def lifespan(app: FastAPI):
     init_db()
     mock_sensor_service.start()
+    schedule_service.start()
     yield
     mock_sensor_service.stop()
+    schedule_service.stop()
 
 
 app = FastAPI(
@@ -60,6 +63,7 @@ app.add_middleware(
 
 app.include_router(sensors.router)
 app.include_router(fans.router)
+app.include_router(schedules.router)
 
 
 @app.get("/api/health")
