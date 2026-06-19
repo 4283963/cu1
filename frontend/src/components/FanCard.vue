@@ -11,6 +11,7 @@ const props = defineProps({
 const emit = defineEmits(['toggle', 'on', 'off'])
 
 const controlling = ref(false)
+const DEBOUNCE_MS = 500
 
 const formattedTime = computed(() => {
   if (!props.fan.last_updated) return ''
@@ -23,41 +24,38 @@ const formattedTime = computed(() => {
   })
 })
 
-async function handleToggle() {
+function withLock(fn) {
   if (controlling.value) return
   controlling.value = true
   try {
+    fn()
+  } finally {
+    setTimeout(() => {
+      controlling.value = false
+    }, DEBOUNCE_MS)
+  }
+}
+
+function handleToggle() {
+  withLock(() => {
     emit('toggle', props.fan.id)
-  } finally {
-    setTimeout(() => {
-      controlling.value = false
-    }, 300)
-  }
+  })
 }
 
-async function handleOn() {
-  if (controlling.value) return
-  controlling.value = true
-  try {
+function handleOn() {
+  withLock(() => {
     emit('on', props.fan.id)
-  } finally {
-    setTimeout(() => {
-      controlling.value = false
-    }, 300)
-  }
+  })
 }
 
-async function handleOff() {
-  if (controlling.value) return
-  controlling.value = true
-  try {
+function handleOff() {
+  withLock(() => {
     emit('off', props.fan.id)
-  } finally {
-    setTimeout(() => {
-      controlling.value = false
-    }, 300)
-  }
+  })
 }
+
+const showOnButton = computed(() => !props.fan.is_running && !controlling.value)
+const showOffButton = computed(() => props.fan.is_running && !controlling.value)
 </script>
 
 <template>
@@ -86,13 +84,13 @@ async function handleOff() {
       </div>
       <div
         :class="[
-          'px-3 py-1 rounded-full text-xs font-medium',
+          'px-3 py-1 rounded-full text-xs font-medium transition-all',
           fan.is_running
             ? 'bg-primary-500 text-white'
             : 'bg-gray-200 text-gray-500'
         ]"
       >
-        {{ fan.is_running ? '运行中' : '已停止' }}
+        {{ controlling ? '处理中...' : (fan.is_running ? '运行中' : '已停止') }}
       </div>
     </div>
 
@@ -101,37 +99,40 @@ async function handleOff() {
         @click="handleOn"
         :disabled="fan.is_running || controlling"
         :class="[
-          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200',
+          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 select-none',
           fan.is_running || controlling
             ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            : 'bg-primary-500 text-white hover:bg-primary-600 active:scale-95'
+            : 'bg-primary-500 text-white hover:bg-primary-600 active:scale-95 shadow-sm hover:shadow'
         ]"
       >
-        开启
+        <span v-if="controlling && !fan.is_running">...</span>
+        <span v-else>开启</span>
       </button>
       <button
         @click="handleToggle"
         :disabled="controlling"
         :class="[
-          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200',
+          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 select-none',
           controlling
             ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            : 'bg-warning-500 text-white hover:bg-warning-600 active:scale-95'
+            : 'bg-warning-500 text-white hover:bg-warning-600 active:scale-95 shadow-sm hover:shadow'
         ]"
       >
-        {{ fan.is_running ? '关闭' : '启动' }}
+        <span v-if="controlling">处理中</span>
+        <span v-else>{{ fan.is_running ? '一键关闭' : '一键启动' }}</span>
       </button>
       <button
         @click="handleOff"
         :disabled="!fan.is_running || controlling"
         :class="[
-          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200',
+          'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 select-none',
           !fan.is_running || controlling
             ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            : 'bg-danger-500 text-white hover:bg-danger-600 active:scale-95'
+            : 'bg-danger-500 text-white hover:bg-danger-600 active:scale-95 shadow-sm hover:shadow'
         ]"
       >
-        关闭
+        <span v-if="controlling && fan.is_running">...</span>
+        <span v-else>关闭</span>
       </button>
     </div>
 

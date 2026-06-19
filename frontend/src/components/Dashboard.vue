@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
 import { useSensorWebSocket } from '../composables/useWebSocket'
 import { sensorApi } from '../api'
 import SensorCard from './SensorCard.vue'
@@ -7,17 +7,18 @@ import SensorCard from './SensorCard.vue'
 const sensorData = reactive({})
 const nodes = ref([])
 const loading = ref(true)
-const wsConnected = ref(false)
+const globalError = ref(null)
+const refreshTimer = ref(null)
+const lastUpdateTime = ref(null)
 
 function handleWebSocketMessage(message) {
-  if (message.type === 'connection_established') {
-    wsConnected.value = true
-  } else if (message.type === 'sensor_reading') {
+  if (message.type === 'sensor_reading') {
     const data = message.data
     sensorData[data.sensor_node_id] = {
       ...data,
       timestamp: message.timestamp
     }
+    lastUpdateTime.value = Date.now()
   }
 }
 
@@ -26,6 +27,7 @@ const { isConnected, connectionError } = useSensorWebSocket(handleWebSocketMessa
 async function loadInitialData() {
   try {
     loading.value = true
+    globalError.value = null
     const [nodesData, readingsData] = await Promise.all([
       sensorApi.getNodes(),
       sensorApi.getLatestReadings()
@@ -42,10 +44,33 @@ async function loadInitialData() {
         timestamp: reading.timestamp
       }
     })
+    lastUpdateTime.value = Date.now()
   } catch (e) {
+    globalError.value = e.message || '加载失败'
     console.error('Failed to load initial data:', e)
   } finally {
     loading.value = false
+  }
+}
+
+async function refreshSensorData() {
+  try {
+    const readingsData = await sensorApi.getLatestReadings()
+    readingsData.forEach(reading => {
+      sensorData[reading.sensor_node_id] = {
+        ...(sensorData[reading.sensor_node_id] || {}),
+        id: reading.id,
+        sensor_node_id: reading.sensor_node_id,
+        sensor_node_name: reading.sensor_node.name,
+        sensor_node_location: reading.sensor_node.location,
+        temperature: reading.temperature,
+        humidity: reading.humidity,
+        timestamp: reading.timestamp
+      }
+    })
+    lastUpdateTime.value = Date.now()
+  } catch (e) {
+    console.error('Failed to refresh sensor data:', e)
   }
 }
 
@@ -54,13 +79,13 @@ const activeNodes = () => nodes.value.filter(n => n.is_active)
 const avgTemperature = () => {
   const readings = Object.values(sensorData)
   if (readings.length === 0) return 0
-  return readings.reduce((sum, r) => sum + r.temperature, 0) / readings.length
+  return readings.reduce((sum, r) => sum + (r.temperature || 0), 0) / readings.length
 }
 
 const avgHumidity = () => {
   const readings = Object.values(sensorData)
   if (readings.length === 0) return 0
-  return readings.reduce((sum, r) => sum + r.humidity, 0) / readings.length
+  return readings.reduce((sum, r) => sum + (r.humidity || 0), 0) / readings.length
 }
 
 const alertCount = () => {
@@ -69,13 +94,47 @@ const alertCount = () => {
   }).length
 }
 
+const isStale = () => {
+  if (!lastUpdateTime.value) return false
+  return Date.now() - lastUpdateTime.value > 15000
+}
+
+watch(isConnected, (connected) => {
+  if (connected) {
+    loadInitialData()
+  }
+})
+
 onMounted(() => {
   loadInitialData()
+  refreshTimer.value = setInterval(() => {
+    if (!isConnected.value || isStale()) {
+      refreshSensorData()
+    }
+  }, 8000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer.value) {
+    clearInterval(refreshTimer.value)
+  }
 })
 </script>
 
 <template>
   <div>
+    <div v-if="globalError" class="mb-4 p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-700 text-sm">
+      ⚠️ {{ globalError }}
+    </div>
+
+    <div v-if="connectionError" class="mb-4 p-3 bg-warning-50 border border-warning-200 rounded-lg text-warning-700 text-sm">
+      🔌 {{ connectionError }}
+    </div>
+
+    <div v-if="isStale() && !loading" class="mb-4 p-3 bg-warning-50 border border-warning-200 rounded-lg text-warning-700 text-sm">
+      ⚠️ 实时数据已暂停刷新，正在尝试恢复...
+    </div>
+
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
       <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
         <div class="flex items-center justify-between">
@@ -136,12 +195,12 @@ onMounted(() => {
         <div class="mt-3 flex items-center gap-2 text-sm">
           <span
             :class="[
-              'w-2 h-2 rounded-full',
-              isConnected ? 'bg-primary-500 animate-pulse' : 'bg-gray-300'
+              'w-2 h-2 rounded-full transition-colors',
+              isConnected && !isStale() ? 'bg-primary-500 animate-pulse' : 'bg-gray-300'
             ]"
           ></span>
           <span class="text-gray-500">
-            {{ isConnected ? '实时数据推送中' : '连接断开' }}
+            {{ isConnected && !isStale() ? '实时数据推送中' : (isConnected ? '数据延迟中' : '连接断开-HTTP轮询备用') }}
           </span>
         </div>
       </div>
@@ -149,9 +208,17 @@ onMounted(() => {
 
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold text-gray-800">监控节点实时数据</h2>
-      <span class="text-sm text-gray-400">
-        共 {{ activeNodes().length }} 个监控节点
-      </span>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-gray-400">
+          共 {{ activeNodes().length }} 个监控节点
+        </span>
+        <button
+          @click="loadInitialData"
+          class="text-sm text-primary-600 hover:text-primary-700 transition-colors py-1 px-2 rounded hover:bg-primary-50"
+        >
+          🔄 刷新
+        </button>
+      </div>
     </div>
 
     <div v-if="loading" class="flex justify-center py-12">
@@ -174,13 +241,6 @@ onMounted(() => {
         :humidity="sensorData[node.id]?.humidity || 0"
         :timestamp="sensorData[node.id]?.timestamp || new Date().toISOString()"
       />
-    </div>
-
-    <div
-      v-if="connectionError"
-      class="mt-4 p-4 bg-danger-50 border border-danger-200 rounded-lg text-danger-700 text-sm"
-    >
-      {{ connectionError }}
     </div>
   </div>
 </template>
